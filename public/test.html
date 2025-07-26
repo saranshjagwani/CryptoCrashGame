@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Crypto Crash Game</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      padding: 20px;
+    }
+    input, button {
+      padding: 8px;
+      margin: 5px 0;
+    }
+    button {
+      background-color: #28a745;
+      border: none;
+      color: white;
+      cursor: pointer;
+      border-radius: 4px;
+    }
+    button:hover {
+      background-color: #218838;
+    }
+    #wallet {
+      margin-top: 10px;
+      margin-bottom: 20px;
+    }
+    #log {
+      background: #f9f9f9;
+      border: 1px solid #ccc;
+      padding: 10px;
+      height: 100px;
+      overflow-y: auto;
+      margin-top: 20px;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>🧠 Crypto Crash Game</h1>
+
+  <h3>👤 Login or Create New User</h3>
+  <input id="loginUserId" placeholder="Enter your username" />
+  <button onclick="login()">✅ Login / Create</button>
+  <p id="userStatus"></p>
+  <hr />
+
+  <h2>🔁 Multiplier: <span id="multiplier">1</span>x</h2>
+  <h3 id="status">Waiting for round...</h3>
+
+  <hr />
+
+  <h3>💵 Place Bet</h3>
+  <input id="usdBet" type="number" placeholder="Enter bet in USD" />
+  <button onclick="placeBet()">🎰 Place Bet</button>
+  <p id="betStatus"></p>
+
+  <h3>💸 Cashout</h3>
+  <input id="betAmount" placeholder="Your bet amount (crypto)" />
+  <button onclick="cashout()">💰 Cashout</button>
+  <p id="cashoutStatus"></p>
+
+  <h3>👛 Wallet</h3>
+  <button onclick="getWallet()">🔍 Refresh Wallet</button>
+  <div id="wallet"></div>
+
+  <h3>📜 Game Log</h3>
+  <div id="log"></div>
+
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+  <script>
+    const socket = io("http://localhost:3000");
+    let userId = null;
+    let roundCrashed = false;
+
+    socket.on("connect", () => {
+      console.log("✅ Connected to WebSocket");
+    });
+
+    socket.on("multiplier_update", (data) => {
+      document.getElementById("multiplier").innerText = data.multiplier;
+    });
+
+    socket.on("round_crash", (data) => {
+      roundCrashed = true;
+      document.getElementById("status").innerText = `💥 Game Crashed at ${data.crashPoint}x`;
+
+      const log = document.getElementById("log");
+      const lossMsg = `😢 If you didn't cashout, you lost your bet.`;
+      const p = document.createElement("p");
+      p.style.color = "red";
+      p.innerText = lossMsg;
+      log.appendChild(p);
+      log.scrollTop = log.scrollHeight;
+    });
+
+    socket.on("round_start", () => {
+      roundCrashed = false;
+      document.getElementById("status").innerText = "🚀 New Round Started!";
+      document.getElementById("betStatus").innerText = "";
+      document.getElementById("cashoutStatus").innerText = "";
+    });
+
+    socket.on("cashout_success", (data) => {
+      const msg = `✅ You cashed out ${data.winAmount.toFixed(8)} BTC at ${data.multiplier}x!`;
+
+      const log = document.getElementById("log");
+      const p = document.createElement("p");
+      p.style.color = "green";
+      p.innerText = msg;
+      log.appendChild(p);
+      log.scrollTop = log.scrollHeight;
+
+      document.getElementById("cashoutStatus").innerText = msg;
+      getWallet();
+    });
+
+    socket.on("cashout_failed", (err) => {
+      const msg = `❌ Cashout Failed: ${err.error}`;
+      document.getElementById("cashoutStatus").innerText = msg;
+
+      const log = document.getElementById("log");
+      const p = document.createElement("p");
+      p.style.color = "red";
+      p.innerText = msg;
+      log.appendChild(p);
+      log.scrollTop = log.scrollHeight;
+    });
+
+    socket.on("player_cashout", (data) => {
+      const msg = `🧍 ${data.userId} cashed out ${data.winAmount.toFixed(8)} BTC at ${data.multiplier}x`;
+      const log = document.getElementById("log");
+      const p = document.createElement("p");
+      p.innerText = msg;
+      log.appendChild(p);
+      log.scrollTop = log.scrollHeight;
+    });
+
+    function placeBet() {
+      if (!userId) return alert("Please log in first.");
+
+      const usdAmount = parseFloat(document.getElementById("usdBet").value);
+      if (!usdAmount || usdAmount <= 0) {
+        alert("Please enter a valid USD amount.");
+        return;
+      }
+
+      fetch("http://localhost:3000/api/game/bet", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          userId,
+          usdAmount,
+          crypto: "BTC"
+        })
+      })
+        .then(res => res.json())
+        .then(data => {
+          if (data.error) {
+            alert(`❌ Bet failed: ${data.error}`);
+          } else {
+            document.getElementById("betStatus").innerText = `✅ Bet placed: ${data.cryptoAmount.toFixed(8)} BTC`;
+            document.getElementById("betAmount").value = data.cryptoAmount;
+            getWallet();
+          }
+        });
+    }
+
+    function cashout() {
+      if (!userId) return alert("Please log in first.");
+
+      const betAmount = parseFloat(document.getElementById("betAmount").value);
+      if (!betAmount || betAmount <= 0) {
+        alert("Please enter a valid crypto amount.");
+        return;
+      }
+
+      socket.emit("cashout", {
+        userId,
+        crypto: "BTC",
+        betAmount,
+      });
+    }
+
+    function getWallet() {
+      if (!userId) return;
+
+      fetch(`http://localhost:3000/api/game/wallet/${userId}`)
+        .then(res => res.json())
+        .then(data => {
+          if (!data.BTC || !data.ETH) return;
+          document.getElementById("wallet").innerHTML = `
+            BTC: ${data.BTC.crypto.toFixed(8)} (~$${data.BTC.usd})<br>
+            ETH: ${data.ETH.crypto.toFixed(8)} (~$${data.ETH.usd})
+          `;
+        });
+    }
+
+    function login() {
+      const input = document.getElementById("loginUserId").value.trim();
+      if (!input) return alert("Please enter a username");
+
+      userId = input;
+      localStorage.setItem("userId", userId);
+      document.getElementById("userStatus").innerText = `👋 Hello, ${userId}`;
+
+      fetch("http://localhost:3000/api/game/create-user", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId })
+      })
+        .then((res) => res.json())
+        .then((data) => {
+          if (data.error) {
+            console.log("User already exists, logging in...");
+          } else {
+            alert(`✅ User '${userId}' created`);
+          }
+          getWallet();
+        })
+        .catch((err) => {
+          console.error("Error:", err);
+          alert("❌ Error creating/logging in user");
+        });
+    }
+
+    // Auto-login if saved
+    window.onload = () => {
+      const saved = localStorage.getItem("userId");
+      if (saved) {
+        userId = saved;
+        document.getElementById("loginUserId").value = saved;
+        document.getElementById("userStatus").innerText = `👋 Welcome back, ${userId}`;
+        getWallet();
+      }
+    };
+  </script>
+</body>
+</html>
